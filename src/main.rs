@@ -87,7 +87,14 @@ fn main() {
         if let Some(glfw_extensions) = glfw.get_required_instance_extensions_raw() {
             create_info.set_enabled_extensions(glfw_extensions);
         }
-        ash_vk.create_instance(&create_info, None).unwrap();
+        ash_vk.create_instance(&create_info, None).unwrap()
+    };
+
+    let device = {
+        use ash::version::InstanceV1_0;
+
+        let devices = instance.enumerate_physical_devices().unwrap();
+        println!("Found {} physical devices.", devices.len());
     };
 
     while !window.should_close() {
