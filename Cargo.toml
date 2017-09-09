@@ -1,0 +1,12 @@
+[package]
+name = "vk-playground"
+version = "0.1.0"
+authors = ["Matt Coffin <mcoffin13@gmail.com>"]
+
+[dependencies]
+ash = "^0.18.4"
+libc = "^0.2.30"
+
+[dependencies.glfw]
+version = "^0.17.0"
+features = ["glfw-sys", "vulkan"]
