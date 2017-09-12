@@ -6,7 +6,10 @@ authors = ["Matt Coffin <mcoffin13@gmail.com>"]
 [dependencies]
 ash = "^0.18.4"
 libc = "^0.2.30"
+log = "^0.3.8"
+env_logger = "^0.4.3"
 
 [dependencies.glfw]
 version = "^0.17.0"
-features = ["glfw-sys", "vulkan"]
+default-features = false
+features = ["vulkan"]
