@@ -13,3 +13,7 @@ env_logger = "^0.4.3"
 version = "^0.17.0"
 default-features = false
 features = ["vulkan"]
+
+[features]
+default = ["safe_create"]
+safe_create = []

@@ -1,3 +1,4 @@
+#![cfg_attr(feature = "safe_create", feature(conservative_impl_trait, unboxed_closures))]
 #[macro_use] extern crate ash;
 extern crate glfw;
 extern crate libc;
@@ -6,6 +7,8 @@ extern crate env_logger;
 
 mod glfw_surface;
 mod vk_mem;
+#[cfg(feature = "safe_create")]
+mod safe_create;
 
 use ash::vk;
 use libc::{ c_char, c_float, c_uint };
@@ -378,12 +381,12 @@ fn main() {
                 instance.create_device(device, &create_info, None).unwrap()
             }
         };
-        let destroy_image_view = |image_view: vk::types::ImageView| {
-            debug!("Destroying image view: {:?}", image_view);
-            unsafe {
-                device.destroy_image_view(image_view, None);
-            }
-        };
+        //let destroy_image_view = |image_view: vk::types::ImageView| {
+        //    debug!("Destroying image view: {:?}", image_view);
+        //    unsafe {
+        //        device.destroy_image_view(image_view, None);
+        //    }
+        //};
         let vk_swapchain = ash::extensions::Swapchain::new(&instance, &device).unwrap();
         let swapchain = {
             use vk::types::*;
@@ -449,8 +452,7 @@ fn main() {
                         layer_count: 1,
                     },
                 };
-                let image_view = unsafe { device.create_image_view(&create_info, None).unwrap() };
-                vk_mem::VkOwned::new(image_view, &destroy_image_view)
+                safe_create::create_image_view_safe(&device, &create_info, None)
             }).collect();
             assert!(swapchain_images.len() as u32 >= swap_image_count);
             debug!("We desired at least {} images. The swapchain is using {}", swap_image_count, swapchain_images.len());
