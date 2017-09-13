@@ -109,6 +109,8 @@ fn main() {
 
     let ash_vk: ash::Entry<ash::version::V1_0> = ash::Entry::new().unwrap();
 
+    let required_extensions = required_extensions();
+
     let instance = {
         use ash::version::EntryV1_0;
         use vk::types::*;
@@ -194,7 +196,7 @@ fn main() {
                     let properties = instance.get_physical_device_properties(dev);
                     let features = instance.get_physical_device_features(dev);
 
-                    let extensions_supported = check_physical_device_extension_support(&instance, dev, &required_extensions());
+                    let extensions_supported = check_physical_device_extension_support(&instance, dev, &required_extensions);
 
                     (properties.device_type == PhysicalDeviceType::DiscreteGpu && features.geometry_shader != 0 && extensions_supported)
                 })
@@ -235,6 +237,10 @@ fn main() {
             let mut device_features: PhysicalDeviceFeatures = Default::default();
             device_features.geometry_shader = true as Bool32;
 
+            let required_extensions_data: Vec<*const c_char> = required_extensions.iter()
+                .map(|name| name.as_ref().as_ptr())
+                .collect();
+
             let create_info = DeviceCreateInfo {
                 s_type: StructureType::DeviceCreateInfo,
                 p_next: ptr::null(),
@@ -243,8 +249,8 @@ fn main() {
                 p_queue_create_infos: create_infos.as_ptr(),
                 enabled_layer_count: 0,
                 pp_enabled_layer_names: ptr::null(),
-                enabled_extension_count: 0,
-                pp_enabled_extension_names: ptr::null(),
+                enabled_extension_count: required_extensions_data.len() as libc::uint32_t,
+                pp_enabled_extension_names: required_extensions_data.as_slice().as_ptr(),
                 p_enabled_features: &device_features as *const PhysicalDeviceFeatures
             };
             unsafe {
