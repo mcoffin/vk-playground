@@ -91,6 +91,23 @@ static PREFERRED_FORMAT: vk::types::SurfaceFormatKHR = vk::types::SurfaceFormatK
     color_space: vk::types::ColorSpaceKHR::SrgbNonlinear
 };
 
+trait Bounded {
+    fn bounded<'a>(&'a self, min: &'a Self, max: &'a Self) -> &'a Self;
+}
+
+impl<T> Bounded for T where T: PartialOrd {
+    fn bounded<'a> (&'a self, min: &'a T, max: &'a T) -> &'a T {
+        assert!(min < max);
+        if self < min {
+            min
+        } else if self > max {
+            max
+        } else {
+            self
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct SwapChainSupportDetails {
     pub capabilities: vk::types::SurfaceCapabilitiesKHR,
@@ -131,6 +148,22 @@ impl SwapChainSupportDetails {
             debug!("Using presentation mode: {:?}", mode);
             mode
         })
+    }
+
+    pub fn choose_swap_extent(&self, window: &glfw::Window) -> vk::types::Extent2D {
+        if self.capabilities.current_extent.width != std::u32::MAX {
+            debug!("Using device's preferred extent: {:?}", &self.capabilities.current_extent);
+            self.capabilities.current_extent.clone()
+        } else {
+            let (width_hint, height_hint) = window.get_size();
+            let (width_hint, height_hint) = (width_hint as u32, height_hint as u32);
+            let ret = vk::types::Extent2D {
+                width: *width_hint.bounded(&self.capabilities.min_image_extent.width, &self.capabilities.max_image_extent.width),
+                height: *height_hint.bounded(&self.capabilities.min_image_extent.height, &self.capabilities.max_image_extent.height),
+            };
+            debug!("Using our generated swap extent: {:?}", &ret);
+            ret
+        }
     }
 }
 
@@ -204,7 +237,7 @@ fn main() {
             vk_surface.destroy_surface_khr(s, None)
         });
 
-        let (device, graphics_family_idx, presentation_family_idx, surface_format, present_mode) = {
+        let (device, graphics_family_idx, presentation_family_idx, surface_format, present_mode, swap_extent) = {
             use ash::version::InstanceV1_0;
             use vk::types::*;
 
@@ -246,10 +279,10 @@ fn main() {
                     details.choose_format()
                         .and_then(|format| {
                             details.choose_present_mode()
-                                .map(|present_mode| (dev, gfx, present, format.clone(), present_mode))
+                                .map(|present_mode| (dev, gfx, present, format.clone(), present_mode, details.choose_swap_extent(&window)))
                         })
                 })
-                .find(|&(dev, _, _, _, _)| {
+                .find(|&(dev, _, _, _, _, _)| {
                     let properties = instance.get_physical_device_properties(dev);
                     let features = instance.get_physical_device_features(dev);
 
