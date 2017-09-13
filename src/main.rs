@@ -86,6 +86,11 @@ fn check_physical_device_extension_support<I, It, Cs>(instance: &I, device: vk::
     })
 }
 
+static PREFERRED_FORMAT: vk::types::SurfaceFormatKHR = vk::types::SurfaceFormatKHR {
+    format: vk::types::Format::R8g8b8a8Unorm,
+    color_space: vk::types::ColorSpaceKHR::SrgbNonlinear
+};
+
 #[derive(Debug, Clone)]
 struct SwapChainSupportDetails {
     pub capabilities: vk::types::SurfaceCapabilitiesKHR,
@@ -94,7 +99,7 @@ struct SwapChainSupportDetails {
 }
 
 impl SwapChainSupportDetails {
-    pub fn new(vk_surface: &ash::extensions::Surface, device: vk::types::PhysicalDevice, surface: vk::types::SurfaceKHR) -> ash::prelude::VkResult<Option<SwapChainSupportDetails>> {
+    pub fn new(vk_surface: &ash::extensions::Surface, device: vk::types::PhysicalDevice, surface: vk::types::SurfaceKHR) -> ash::prelude::VkResult<SwapChainSupportDetails> {
         let capabilities = try!(vk_surface.get_physical_device_surface_capabilities_khr(device, surface));
         let formats = try!(vk_surface.get_physical_device_surface_formats_khr(device, surface));
         let present_modes = try!(vk_surface.get_physical_device_surface_present_modes_khr(device, surface));
@@ -103,15 +108,22 @@ impl SwapChainSupportDetails {
             formats: formats,
             present_modes: present_modes
         };
-        Ok(if ret.is_adequate() {
-            Some(ret)
-        } else {
-            None
-        })
+        Ok(ret)
     }
 
-    fn is_adequate(&self) -> bool {
-        !self.formats.is_empty() && !self.present_modes.is_empty()
+    pub fn choose_format(&self) -> Option<&vk::types::SurfaceFormatKHR> {
+        if self.formats.len() == 1 && self.formats[0].format == vk::types::Format::Undefined {
+            debug!("Using preferred surface format: {:?}", &PREFERRED_FORMAT);
+            Some(&PREFERRED_FORMAT)
+        } else {
+            let ret = self.formats.iter()
+                .find(|f| f.format == PREFERRED_FORMAT.format && f.color_space == PREFERRED_FORMAT.color_space)
+                .or_else(|| self.formats.iter().next());
+            if let Some(f) = ret {
+                debug!("Using device's surface format: {:?}", f);
+            }
+            ret
+        }
     }
 }
 
@@ -185,7 +197,7 @@ fn main() {
             vk_surface.destroy_surface_khr(s, None)
         });
 
-        let (device, graphics_family_idx, presentation_family_idx, swap_chain_support) = {
+        let (device, graphics_family_idx, presentation_family_idx, surface_format) = {
             use ash::version::InstanceV1_0;
             use vk::types::*;
 
@@ -223,9 +235,9 @@ fn main() {
                 })
                 .filter(|&(dev, _, _)| check_physical_device_extension_support(&instance, dev, &required_extensions))
                 .flat_map(|(dev, gfx, present)| {
-                    SwapChainSupportDetails::new(&vk_surface, dev, surface.value)
-                        .unwrap()
-                        .map(|details| (dev, gfx, present, details))
+                    let details = SwapChainSupportDetails::new(&vk_surface, dev, surface.value).unwrap();
+                    details.choose_format()
+                        .map(|format| (dev, gfx, present, format.clone()))
                 })
                 .find(|&(dev, _, _, _)| {
                     let properties = instance.get_physical_device_properties(dev);
