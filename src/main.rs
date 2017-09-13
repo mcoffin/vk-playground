@@ -125,6 +125,13 @@ impl SwapChainSupportDetails {
             ret
         }
     }
+
+    pub fn choose_present_mode(&self) -> Option<vk::types::PresentModeKHR> {
+        self.present_modes.iter().max().map(|&mode| {
+            debug!("Using presentation mode: {:?}", mode);
+            mode
+        })
+    }
 }
 
 #[inline(always)]
@@ -197,7 +204,7 @@ fn main() {
             vk_surface.destroy_surface_khr(s, None)
         });
 
-        let (device, graphics_family_idx, presentation_family_idx, surface_format) = {
+        let (device, graphics_family_idx, presentation_family_idx, surface_format, present_mode) = {
             use ash::version::InstanceV1_0;
             use vk::types::*;
 
@@ -237,9 +244,12 @@ fn main() {
                 .flat_map(|(dev, gfx, present)| {
                     let details = SwapChainSupportDetails::new(&vk_surface, dev, surface.value).unwrap();
                     details.choose_format()
-                        .map(|format| (dev, gfx, present, format.clone()))
+                        .and_then(|format| {
+                            details.choose_present_mode()
+                                .map(|present_mode| (dev, gfx, present, format.clone(), present_mode))
+                        })
                 })
-                .find(|&(dev, _, _, _)| {
+                .find(|&(dev, _, _, _, _)| {
                     let properties = instance.get_physical_device_properties(dev);
                     let features = instance.get_physical_device_features(dev);
 
