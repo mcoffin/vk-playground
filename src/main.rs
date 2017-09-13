@@ -188,6 +188,22 @@ fn required_extensions() -> Vec<std::ffi::CString> {
         .collect()
 }
 
+fn set_queue_family_indices(create_info: &mut vk::types::SwapchainCreateInfoKHR, queue_family_indices: &[u32]) {
+    use std::collections::BTreeSet;
+
+    let unique_queue_families: BTreeSet<u32> = queue_family_indices.iter().map(|&idx| idx).collect();
+
+    if unique_queue_families.len() == 0 {
+        create_info.image_sharing_mode = vk::types::SharingMode::Exclusive;
+        create_info.queue_family_index_count = 0;
+        create_info.p_queue_family_indices = ptr::null();
+    } else {
+        create_info.image_sharing_mode = vk::types::SharingMode::Concurrent;
+        create_info.queue_family_index_count = queue_family_indices.len() as u32;
+        create_info.p_queue_family_indices = queue_family_indices.as_ptr();
+    }
+}
+
 fn main() {
     use std::ffi::CString;
 
@@ -248,7 +264,7 @@ fn main() {
             vk_surface.destroy_surface_khr(s, None)
         });
 
-        let (device, graphics_family_idx, presentation_family_idx, surface_format, present_mode, swap_extent, swap_image_count) = {
+        let (device, graphics_family_idx, presentation_family_idx, surface_format, present_mode, swap_extent, swap_image_count, swap_support) = {
             use ash::version::InstanceV1_0;
             use vk::types::*;
 
@@ -287,13 +303,15 @@ fn main() {
                 .filter(|&(dev, _, _)| check_physical_device_extension_support(&instance, dev, &required_extensions))
                 .flat_map(|(dev, gfx, present)| {
                     let details = SwapChainSupportDetails::new(&vk_surface, dev, surface.value).unwrap();
-                    details.choose_format()
+                    let format = details.choose_format().map(|f| f.clone());
+                    let present_mode = details.choose_present_mode();
+                    format
                         .and_then(|format| {
-                            details.choose_present_mode()
-                                .map(|present_mode| (dev, gfx, present, format.clone(), present_mode, details.choose_swap_extent(&window), triple_buffer_image_count(&details.capabilities)))
+                            present_mode
+                                .map(|present_mode| (dev, gfx, present, format, present_mode, details.choose_swap_extent(&window), triple_buffer_image_count(&details.capabilities), details))
                         })
                 })
-                .find(|&(dev, _, _, _, _, _, _)| {
+                .find(|&(dev, _, _, _, _, _, _, _)| {
                     let properties = instance.get_physical_device_properties(dev);
                     let features = instance.get_physical_device_features(dev);
 
@@ -360,6 +378,37 @@ fn main() {
                 instance.create_device(device, &create_info, None).unwrap()
             }
         };
+        let vk_swapchain = ash::extensions::Swapchain::new(&instance, &device).unwrap();
+        let swapchain = {
+            use vk::types::*;
+
+            let queue_family_indices: [u32; 2] = [graphics_family_idx as u32, presentation_family_idx as u32];
+            let mut create_info = SwapchainCreateInfoKHR {
+                s_type: StructureType::SwapchainCreateInfoKhr,
+                p_next: ptr::null(),
+                flags: Default::default(),
+                surface: surface.value,
+                min_image_count: swap_image_count,
+                image_format: surface_format.format,
+                image_color_space: surface_format.color_space,
+                image_extent: swap_extent,
+                image_array_layers: 1,
+                image_usage: IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                image_sharing_mode: SharingMode::Exclusive,
+                queue_family_index_count: 0,
+                p_queue_family_indices: ptr::null(),
+                pre_transform: swap_support.capabilities.current_transform,
+                composite_alpha: COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+                present_mode: present_mode,
+                clipped: true as Bool32,
+                old_swapchain: SwapchainKHR::null(),
+            };
+            set_queue_family_indices(&mut create_info, &queue_family_indices);
+            debug!("Creating swapchain with parameters: {:?}", &create_info);
+            unsafe {
+                vk_swapchain.create_swapchain_khr(&create_info, None).unwrap()
+            }
+        };
 
         let graphics_queue = unsafe {
             device.get_device_queue(graphics_family_idx as libc::uint32_t, 0)
@@ -370,10 +419,18 @@ fn main() {
         };
         debug!("Using presentation queue: {:?}", presentation_queue);
 
+        let swapchain_images = vk_swapchain.get_swapchain_images_khr(swapchain).unwrap();
+        assert!(swapchain_images.len() as u32 >= swap_image_count);
+        debug!("We desired at least {} images. The swapchain is using {}", swap_image_count, swapchain_images.len());
+
         while !window.should_close() {
             glfw.poll_events();
         }
 
+        debug!("Destroying swapchain");
+        unsafe {
+            vk_swapchain.destroy_swapchain_khr(swapchain, None);
+        }
         debug!("Destroying device");
         unsafe {
             device.destroy_device(None);
