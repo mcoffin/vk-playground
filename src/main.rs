@@ -16,6 +16,10 @@ const WIDTH: u32 = 1280;
 const HEIGHT: u32 = 720;
 const TITLE: &'static str = "Smolders";
 
+const REQUIRED_EXTENSIONS: [&'static str; 1] = [
+    vk::types::VK_KHR_SWAPCHAIN_EXTENSION_NAME
+];
+
 trait GlfwVulkanExtensions {
     /// The implementation from the `glfw` crate converts to rust strings, when
     /// we really don't want to. This works fine since we're passing them right
@@ -66,6 +70,30 @@ fn vk_glfw() -> glfw::Glfw {
     // We must have vulkan support in glfw to continue
     assert!(glfw.vulkan_supported());
     glfw
+}
+
+fn check_physical_device_extension_support<'a, I, It, Cs>(instance: &I, device: vk::types::PhysicalDevice, required_extensions: It) -> bool where
+    It: IntoIterator<Item=Cs>,
+    I: ash::version::InstanceV1_0,
+    Cs: AsRef<std::ffi::CStr>
+{
+    let available_extensions: Vec<&std::ffi::CStr> = instance.enumerate_device_extension_properties(device).unwrap()
+        .iter()
+        .map(|extension_properties| unsafe { std::ffi::CStr::from_ptr(&extension_properties.extension_name as *const c_char) })
+        .collect();
+    required_extensions.into_iter().all(|required_name| {
+        available_extensions.contains(&required_name.as_ref())
+    })
+}
+
+#[inline(always)]
+fn required_extensions() -> Vec<std::ffi::CString> {
+    use std::ffi::CString;
+
+    REQUIRED_EXTENSIONS
+        .into_iter()
+        .map(|&name| CString::new(name).unwrap())
+        .collect()
 }
 
 fn main() {
@@ -132,57 +160,87 @@ fn main() {
 
             let devices = instance.enumerate_physical_devices().unwrap();
             debug!("Found {} possible physical device(s): {:?}", devices.len(), &devices);
+            for extension in REQUIRED_EXTENSIONS.iter() {
+                debug!("Manually requiring extension: {:?}", extension);
+            }
             devices.into_iter()
                 .flat_map(|dev| {
+                    use std::collections::BTreeSet;
+
                     let queue_families = instance.get_physical_device_queue_family_properties(dev);
                     let queue_families_count = queue_families.len();
-                    let gfx_family = queue_families.iter()
+                    let gfx_families: BTreeSet<usize> = queue_families.iter()
                         .zip(0..queue_families_count)
-                        .find(|&(queue_family, _)| queue_family.queue_count > 0 && queue_family.queue_flags.subset(QUEUE_GRAPHICS_BIT))
-                        .map(|(_, idx)| idx);
-                    let presentation_family = (0..queue_families_count)
-                        .find(|&idx| vk_surface.get_physical_device_surface_support_khr(dev, idx as libc::uint32_t, surface.value));
-                    match (gfx_family, presentation_family) {
-                        (Some(g), Some(p)) => Some((dev, g, p)),
-                        _ => None
-                    }
+                        .filter(|&(queue_family, _)| queue_family.queue_count > 0 && queue_family.queue_flags.subset(QUEUE_GRAPHICS_BIT))
+                        .map(|(_, idx)| idx)
+                        .collect();
+                    let presentation_families: BTreeSet<usize> = (0..queue_families_count)
+                        .filter(|&idx| vk_surface.get_physical_device_surface_support_khr(dev, idx as libc::uint32_t, surface.value))
+                        .collect();
+                    gfx_families.intersection(&presentation_families)
+                        .next()
+                        .map(|&family| (dev, family, family))
+                        .or_else(|| {
+                            debug!("Graphics and presentation queue families are not the same. This is not ideal");
+                            let gfx_family = gfx_families.iter().map(|&idx| idx).next();
+                            let presentation_family = presentation_families.iter().map(|&idx| idx).next();
+                            match (gfx_family, presentation_family) {
+                                (Some(g), Some(p)) => Some((dev, g, p)),
+                                _ => None
+                            }
+                        })
                 })
                 .find(|&(dev, _, _)| {
                     let properties = instance.get_physical_device_properties(dev);
                     let features = instance.get_physical_device_features(dev);
-                    (properties.device_type == PhysicalDeviceType::DiscreteGpu && features.geometry_shader != 0)
+
+                    let extensions_supported = check_physical_device_extension_support(&instance, dev, &required_extensions());
+
+                    (properties.device_type == PhysicalDeviceType::DiscreteGpu && features.geometry_shader != 0 && extensions_supported)
                 })
                 .expect("Could not find a suitable physical device!")
         };
         debug!("Found suitable physical device: {:?}", device);
-        debug!("Using queue family: {}", graphics_family_idx);
-
-        if graphics_family_idx != presentation_family_idx {
-            panic!("Unsupported configuration: graphics queue and presentation queue must be of the same family");
-        }
+        debug!("Using graphics queue family: {}", graphics_family_idx);
+        debug!("Using presentation queue family: {}", presentation_family_idx);
 
         let device = {
             use ash::version::InstanceV1_0;
             use vk::types::*;
 
             let queue_priorities: [c_float; 1] = [1.0];
-            let mut queue_create_info = DeviceQueueCreateInfo {
-                s_type: StructureType::DeviceQueueCreateInfo,
-                p_next: ptr::null(),
-                flags: Default::default(),
-                queue_family_index: graphics_family_idx as libc::uint32_t,
-                queue_count: 0,
-                p_queue_priorities: ptr::null()
-            };
-            queue_create_info.set_queue_priorities(&queue_priorities);
+
+            let mut create_infos: [DeviceQueueCreateInfo; 2] = [
+                DeviceQueueCreateInfo {
+                    s_type: StructureType::DeviceQueueCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    queue_family_index: graphics_family_idx as libc::uint32_t,
+                    queue_count: 0,
+                    p_queue_priorities: ptr::null()
+                },
+                DeviceQueueCreateInfo {
+                    s_type: StructureType::DeviceQueueCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    queue_family_index: presentation_family_idx as libc::uint32_t,
+                    queue_count: 0,
+                    p_queue_priorities: ptr::null()
+                }
+            ];
+            for create_info in create_infos.iter_mut() {
+                create_info.set_queue_priorities(&queue_priorities);
+            }
+
             let mut device_features: PhysicalDeviceFeatures = Default::default();
             device_features.geometry_shader = true as Bool32;
+
             let create_info = DeviceCreateInfo {
                 s_type: StructureType::DeviceCreateInfo,
                 p_next: ptr::null(),
                 flags: Default::default(),
-                queue_create_info_count: 1,
-                p_queue_create_infos: &queue_create_info as *const DeviceQueueCreateInfo,
+                queue_create_info_count: create_infos.len() as libc::uint32_t,
+                p_queue_create_infos: create_infos.as_ptr(),
                 enabled_layer_count: 0,
                 pp_enabled_layer_names: ptr::null(),
                 enabled_extension_count: 0,
@@ -193,6 +251,15 @@ fn main() {
                 instance.create_device(device, &create_info, None).unwrap()
             }
         };
+
+        let graphics_queue = unsafe {
+            device.get_device_queue(graphics_family_idx as libc::uint32_t, 0)
+        };
+        debug!("Using graphics queue: {:?}", graphics_queue);
+        let presentation_queue = unsafe {
+            device.get_device_queue(presentation_family_idx as libc::uint32_t, 1)
+        };
+        debug!("Using presentation queue: {:?}", presentation_queue);
 
         while !window.should_close() {
             glfw.poll_events();
