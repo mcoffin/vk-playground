@@ -72,7 +72,7 @@ fn vk_glfw() -> glfw::Glfw {
     glfw
 }
 
-fn check_physical_device_extension_support<'a, I, It, Cs>(instance: &I, device: vk::types::PhysicalDevice, required_extensions: It) -> bool where
+fn check_physical_device_extension_support<I, It, Cs>(instance: &I, device: vk::types::PhysicalDevice, required_extensions: It) -> bool where
     It: IntoIterator<Item=Cs>,
     I: ash::version::InstanceV1_0,
     Cs: AsRef<std::ffi::CStr>
@@ -84,6 +84,35 @@ fn check_physical_device_extension_support<'a, I, It, Cs>(instance: &I, device: 
     required_extensions.into_iter().all(|required_name| {
         available_extensions.contains(&required_name.as_ref())
     })
+}
+
+#[derive(Debug, Clone)]
+struct SwapChainSupportDetails {
+    pub capabilities: vk::types::SurfaceCapabilitiesKHR,
+    pub formats: Vec<vk::types::SurfaceFormatKHR>,
+    pub present_modes: Vec<vk::types::PresentModeKHR>
+}
+
+impl SwapChainSupportDetails {
+    pub fn new(vk_surface: &ash::extensions::Surface, device: vk::types::PhysicalDevice, surface: vk::types::SurfaceKHR) -> ash::prelude::VkResult<Option<SwapChainSupportDetails>> {
+        let capabilities = try!(vk_surface.get_physical_device_surface_capabilities_khr(device, surface));
+        let formats = try!(vk_surface.get_physical_device_surface_formats_khr(device, surface));
+        let present_modes = try!(vk_surface.get_physical_device_surface_present_modes_khr(device, surface));
+        let ret = SwapChainSupportDetails {
+            capabilities: capabilities,
+            formats: formats,
+            present_modes: present_modes
+        };
+        Ok(if ret.is_adequate() {
+            Some(ret)
+        } else {
+            None
+        })
+    }
+
+    fn is_adequate(&self) -> bool {
+        !self.formats.is_empty() && !self.present_modes.is_empty()
+    }
 }
 
 #[inline(always)]
@@ -156,7 +185,7 @@ fn main() {
             vk_surface.destroy_surface_khr(s, None)
         });
 
-        let (device, graphics_family_idx, presentation_family_idx) = {
+        let (device, graphics_family_idx, presentation_family_idx, swap_chain_support) = {
             use ash::version::InstanceV1_0;
             use vk::types::*;
 
@@ -192,13 +221,17 @@ fn main() {
                             }
                         })
                 })
-                .find(|&(dev, _, _)| {
+                .filter(|&(dev, _, _)| check_physical_device_extension_support(&instance, dev, &required_extensions))
+                .flat_map(|(dev, gfx, present)| {
+                    SwapChainSupportDetails::new(&vk_surface, dev, surface.value)
+                        .unwrap()
+                        .map(|details| (dev, gfx, present, details))
+                })
+                .find(|&(dev, _, _, _)| {
                     let properties = instance.get_physical_device_properties(dev);
                     let features = instance.get_physical_device_features(dev);
 
-                    let extensions_supported = check_physical_device_extension_support(&instance, dev, &required_extensions);
-
-                    (properties.device_type == PhysicalDeviceType::DiscreteGpu && features.geometry_shader != 0 && extensions_supported)
+                    (properties.device_type == PhysicalDeviceType::DiscreteGpu && features.geometry_shader != 0)
                 })
                 .expect("Could not find a suitable physical device!")
         };
