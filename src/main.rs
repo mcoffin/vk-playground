@@ -167,6 +167,17 @@ impl SwapChainSupportDetails {
     }
 }
 
+fn triple_buffer_image_count(capabilities: &vk::types::SurfaceCapabilitiesKHR) -> u32 {
+    let image_count = capabilities.min_image_count + 1;
+    if capabilities.max_image_count > 0 {
+        debug!("Device is imposing max image count over the desired {}: {}", image_count, capabilities.max_image_count);
+        *image_count.bounded(&capabilities.min_image_count, &capabilities.max_image_count)
+    } else {
+        debug!("Device is allowing unlimited image count. Using desired: {}", image_count);
+        image_count
+    }
+}
+
 #[inline(always)]
 fn required_extensions() -> Vec<std::ffi::CString> {
     use std::ffi::CString;
@@ -237,7 +248,7 @@ fn main() {
             vk_surface.destroy_surface_khr(s, None)
         });
 
-        let (device, graphics_family_idx, presentation_family_idx, surface_format, present_mode, swap_extent) = {
+        let (device, graphics_family_idx, presentation_family_idx, surface_format, present_mode, swap_extent, swap_image_count) = {
             use ash::version::InstanceV1_0;
             use vk::types::*;
 
@@ -279,10 +290,10 @@ fn main() {
                     details.choose_format()
                         .and_then(|format| {
                             details.choose_present_mode()
-                                .map(|present_mode| (dev, gfx, present, format.clone(), present_mode, details.choose_swap_extent(&window)))
+                                .map(|present_mode| (dev, gfx, present, format.clone(), present_mode, details.choose_swap_extent(&window), triple_buffer_image_count(&details.capabilities)))
                         })
                 })
-                .find(|&(dev, _, _, _, _, _)| {
+                .find(|&(dev, _, _, _, _, _, _)| {
                     let properties = instance.get_physical_device_properties(dev);
                     let features = instance.get_physical_device_features(dev);
 
@@ -293,6 +304,10 @@ fn main() {
         debug!("Found suitable physical device: {:?}", device);
         debug!("Using graphics queue family: {}", graphics_family_idx);
         debug!("Using presentation queue family: {}", presentation_family_idx);
+        debug!("Using surface format: {:?}", &surface_format);
+        debug!("Using present mode: {:?}", present_mode);
+        debug!("Using swap extent: {:?}", &swap_extent);
+        debug!("Using swap image count: {}", swap_image_count);
 
         let device = {
             use ash::version::InstanceV1_0;
