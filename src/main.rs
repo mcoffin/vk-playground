@@ -378,6 +378,12 @@ fn main() {
                 instance.create_device(device, &create_info, None).unwrap()
             }
         };
+        let destroy_image_view = |image_view: vk::types::ImageView| {
+            debug!("Destroying image view: {:?}", image_view);
+            unsafe {
+                device.destroy_image_view(image_view, None);
+            }
+        };
         let vk_swapchain = ash::extensions::Swapchain::new(&instance, &device).unwrap();
         let swapchain = {
             use vk::types::*;
@@ -419,12 +425,39 @@ fn main() {
         };
         debug!("Using presentation queue: {:?}", presentation_queue);
 
-        let swapchain_images = vk_swapchain.get_swapchain_images_khr(swapchain).unwrap();
-        assert!(swapchain_images.len() as u32 >= swap_image_count);
-        debug!("We desired at least {} images. The swapchain is using {}", swap_image_count, swapchain_images.len());
+        {
+            let swapchain_images = vk_swapchain.get_swapchain_images_khr(swapchain).unwrap();
+            let image_views: Vec<_> = swapchain_images.iter().map(|&image| {
+                let create_info = vk::types::ImageViewCreateInfo {
+                    s_type: vk::types::StructureType::ImageViewCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    image: image,
+                    view_type: vk::types::ImageViewType::Type2d,
+                    format: surface_format.format,
+                    components: vk::types::ComponentMapping {
+                        r: vk::types::ComponentSwizzle::Identity,
+                        g: vk::types::ComponentSwizzle::Identity,
+                        b: vk::types::ComponentSwizzle::Identity,
+                        a: vk::types::ComponentSwizzle::Identity,
+                    },
+                    subresource_range: vk::types::ImageSubresourceRange {
+                        aspect_mask: vk::types::IMAGE_ASPECT_COLOR_BIT,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    },
+                };
+                let image_view = unsafe { device.create_image_view(&create_info, None).unwrap() };
+                vk_mem::VkOwned::new(image_view, &destroy_image_view)
+            }).collect();
+            assert!(swapchain_images.len() as u32 >= swap_image_count);
+            debug!("We desired at least {} images. The swapchain is using {}", swap_image_count, swapchain_images.len());
 
-        while !window.should_close() {
-            glfw.poll_events();
+            while !window.should_close() {
+                glfw.poll_events();
+            }
         }
 
         debug!("Destroying swapchain");
