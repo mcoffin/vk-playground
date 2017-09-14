@@ -9,6 +9,7 @@ mod glfw_surface;
 mod vk_mem;
 #[cfg(feature = "safe_create")]
 mod safe_create;
+mod safe_ext;
 
 use ash::vk;
 use libc::{ c_char, c_float, c_uint };
@@ -327,7 +328,6 @@ fn main() {
         debug!("Using swap image count: {}", swap_image_count);
 
         let device = {
-            use ash::version::InstanceV1_0;
             use vk::types::*;
 
             let queue_priorities: [c_float; 1] = [1.0];
@@ -373,9 +373,8 @@ fn main() {
                 pp_enabled_extension_names: required_extensions_data.as_slice().as_ptr(),
                 p_enabled_features: &device_features as *const PhysicalDeviceFeatures
             };
-            unsafe {
-                instance.create_device(device, &create_info, None).unwrap()
-            }
+            use safe_create::CreateDeviceSafeV1_0;
+            instance.create_device_safe(device, &create_info, None).unwrap()
         };
         //let destroy_image_view = |image_view: vk::types::ImageView| {
         //    debug!("Destroying image view: {:?}", image_view);
@@ -383,83 +382,77 @@ fn main() {
         //        device.destroy_image_view(image_view, None);
         //    }
         //};
-        let vk_swapchain = ash::extensions::Swapchain::new(&instance, &device).unwrap();
-        {
-            let swapchain = {
-                use vk::types::*;
+        let vk_swapchain = safe_ext::SafeSwapchain::new(&instance, &*device).unwrap();
+        let swapchain = {
+            use vk::types::*;
 
-                let queue_family_indices: [u32; 2] = [graphics_family_idx as u32, presentation_family_idx as u32];
-                let mut create_info = SwapchainCreateInfoKHR {
-                    s_type: StructureType::SwapchainCreateInfoKhr,
+            let queue_family_indices: [u32; 2] = [graphics_family_idx as u32, presentation_family_idx as u32];
+            let mut create_info = SwapchainCreateInfoKHR {
+                s_type: StructureType::SwapchainCreateInfoKhr,
+                p_next: ptr::null(),
+                flags: Default::default(),
+                surface: *surface,
+                min_image_count: swap_image_count,
+                image_format: surface_format.format,
+                image_color_space: surface_format.color_space,
+                image_extent: swap_extent,
+                image_array_layers: 1,
+                image_usage: IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                image_sharing_mode: SharingMode::Exclusive,
+                queue_family_index_count: 0,
+                p_queue_family_indices: ptr::null(),
+                pre_transform: swap_support.capabilities.current_transform,
+                composite_alpha: COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+                present_mode: present_mode,
+                clipped: true as Bool32,
+                old_swapchain: SwapchainKHR::null(),
+            };
+            set_queue_family_indices(&mut create_info, &queue_family_indices);
+            debug!("Creating swapchain with parameters: {:?}", &create_info);
+            safe_create::create_swapchain_khr_safe(&vk_swapchain, &create_info, None).unwrap()
+        };
+
+        let graphics_queue = unsafe {
+            device.get_device_queue(graphics_family_idx as libc::uint32_t, 0)
+        };
+        debug!("Using graphics queue: {:?}", graphics_queue);
+        let presentation_queue = unsafe {
+            device.get_device_queue(presentation_family_idx as libc::uint32_t, 1)
+        };
+        debug!("Using presentation queue: {:?}", presentation_queue);
+
+        {
+            let swapchain_images = vk_swapchain.get_swapchain_images_khr(*swapchain).unwrap();
+            let image_views: Vec<_> = swapchain_images.iter().map(|&image| {
+                let create_info = vk::types::ImageViewCreateInfo {
+                    s_type: vk::types::StructureType::ImageViewCreateInfo,
                     p_next: ptr::null(),
                     flags: Default::default(),
-                    surface: *surface,
-                    min_image_count: swap_image_count,
-                    image_format: surface_format.format,
-                    image_color_space: surface_format.color_space,
-                    image_extent: swap_extent,
-                    image_array_layers: 1,
-                    image_usage: IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-                    image_sharing_mode: SharingMode::Exclusive,
-                    queue_family_index_count: 0,
-                    p_queue_family_indices: ptr::null(),
-                    pre_transform: swap_support.capabilities.current_transform,
-                    composite_alpha: COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-                    present_mode: present_mode,
-                    clipped: true as Bool32,
-                    old_swapchain: SwapchainKHR::null(),
+                    image: image,
+                    view_type: vk::types::ImageViewType::Type2d,
+                    format: surface_format.format,
+                    components: vk::types::ComponentMapping {
+                        r: vk::types::ComponentSwizzle::Identity,
+                        g: vk::types::ComponentSwizzle::Identity,
+                        b: vk::types::ComponentSwizzle::Identity,
+                        a: vk::types::ComponentSwizzle::Identity,
+                    },
+                    subresource_range: vk::types::ImageSubresourceRange {
+                        aspect_mask: vk::types::IMAGE_ASPECT_COLOR_BIT,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    },
                 };
-                set_queue_family_indices(&mut create_info, &queue_family_indices);
-                debug!("Creating swapchain with parameters: {:?}", &create_info);
-                safe_create::create_swapchain_khr_safe(&vk_swapchain, &create_info, None).unwrap()
-            };
+                safe_create::create_image_view_safe(&*device, &create_info, None)
+            }).collect();
+            assert!(swapchain_images.len() as u32 >= swap_image_count);
+            debug!("We desired at least {} images. The swapchain is using {}", swap_image_count, swapchain_images.len());
 
-            let graphics_queue = unsafe {
-                device.get_device_queue(graphics_family_idx as libc::uint32_t, 0)
-            };
-            debug!("Using graphics queue: {:?}", graphics_queue);
-            let presentation_queue = unsafe {
-                device.get_device_queue(presentation_family_idx as libc::uint32_t, 1)
-            };
-            debug!("Using presentation queue: {:?}", presentation_queue);
-
-            {
-                let swapchain_images = vk_swapchain.get_swapchain_images_khr(*swapchain).unwrap();
-                let image_views: Vec<_> = swapchain_images.iter().map(|&image| {
-                    let create_info = vk::types::ImageViewCreateInfo {
-                        s_type: vk::types::StructureType::ImageViewCreateInfo,
-                        p_next: ptr::null(),
-                        flags: Default::default(),
-                        image: image,
-                        view_type: vk::types::ImageViewType::Type2d,
-                        format: surface_format.format,
-                        components: vk::types::ComponentMapping {
-                            r: vk::types::ComponentSwizzle::Identity,
-                            g: vk::types::ComponentSwizzle::Identity,
-                            b: vk::types::ComponentSwizzle::Identity,
-                            a: vk::types::ComponentSwizzle::Identity,
-                        },
-                        subresource_range: vk::types::ImageSubresourceRange {
-                            aspect_mask: vk::types::IMAGE_ASPECT_COLOR_BIT,
-                            base_mip_level: 0,
-                            level_count: 1,
-                            base_array_layer: 0,
-                            layer_count: 1,
-                        },
-                    };
-                    safe_create::create_image_view_safe(&device, &create_info, None)
-                }).collect();
-                assert!(swapchain_images.len() as u32 >= swap_image_count);
-                debug!("We desired at least {} images. The swapchain is using {}", swap_image_count, swapchain_images.len());
-
-                while !window.should_close() {
-                    glfw.poll_events();
-                }
+            while !window.should_close() {
+                glfw.poll_events();
             }
-        }
-        debug!("Destroying device");
-        unsafe {
-            device.destroy_device(None);
         }
     };
 

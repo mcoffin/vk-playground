@@ -1,5 +1,5 @@
-use std::borrow::{ Borrow, BorrowMut };
-use std::ops::{ Deref, DerefMut };
+use std::borrow::Borrow;
+use std::ops::Deref;
 /// Wrapper struct for representing ownership of values in vulkan that implement
 /// the `Copy` trait.
 pub struct VkOwned<A: Copy, F: Fn(A)> {
@@ -38,22 +38,10 @@ impl<A: Copy, F: Fn(A)> Borrow<A> for VkOwned<A, F> {
     }
 }
 
-impl<A: Copy, F: Fn(A)> BorrowMut<A> for VkOwned<A, F> {
-    fn borrow_mut(&mut self) -> &mut A {
-        &mut self.value
-    }
-}
-
 impl<A: Copy, F: Fn(A)> Deref for VkOwned<A, F> {
     type Target = A;
 
     fn deref(&self) -> &A {
         &self.value
-    }
-}
-
-impl<A: Copy, F: Fn(A)> DerefMut for VkOwned<A, F> {
-    fn deref_mut(&mut self) -> &mut A {
-        &mut self.value
     }
 }
