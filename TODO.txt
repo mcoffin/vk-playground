@@ -1,0 +1,1 @@
+Try seeing if you can use associated types to get VkOwned to not have to use conservative_impl_trait
