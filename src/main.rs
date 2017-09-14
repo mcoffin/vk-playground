@@ -261,11 +261,7 @@ fn main() {
     {
         use ash::version::DeviceV1_0;
 
-        let surface = glfw_surface::create_window_surface(&instance, &window, None).unwrap();
-        let surface = vk_mem::VkOwned::new(surface, |s| unsafe { 
-            debug!("Destroying window surface");
-            vk_surface.destroy_surface_khr(s, None)
-        });
+        let surface = safe_create::create_window_surface_safe(&instance, &vk_surface, &window, None).unwrap();
 
         let (device, graphics_family_idx, presentation_family_idx, surface_format, present_mode, swap_extent, swap_image_count, swap_support) = {
             use ash::version::InstanceV1_0;
