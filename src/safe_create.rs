@@ -89,3 +89,38 @@ pub fn create_window_surface_safe<'s, I: InstanceV1_0>(vk: &'s I, vk_surface: &'
         vk_surface.destroy_surface_khr(surface, allocator)
     }) })
 }
+
+pub fn create_pipeline_layout_safe<'d, D: DeviceV1_0>(device: &'d D, create_info: &PipelineLayoutCreateInfo, allocator: Option<&'d AllocationCallbacks>) -> VkResult<VkOwned<PipelineLayout, impl Fn(PipelineLayout)>> {
+    let unsafe_layout = unsafe { device.create_pipeline_layout(create_info, allocator) };
+    unsafe_layout.map(|unsafe_layout| unsafe { VkOwned::new(unsafe_layout, move |layout| {
+        trace!("Destroying pipeline layout: {:?}", layout);
+        device.destroy_pipeline_layout(layout, allocator);
+    }) })
+}
+
+pub fn create_render_pass_safe<'d, D: DeviceV1_0>(device: &'d D, create_info: &RenderPassCreateInfo, allocator: Option<&'d AllocationCallbacks>) -> VkResult<VkOwned<RenderPass, impl Fn(RenderPass)>> {
+    let unsafe_render_pass = unsafe { device.create_render_pass(create_info, allocator) };
+    unsafe_render_pass.map(|unsafe_render_pass| unsafe { VkOwned::new(unsafe_render_pass, move |render_pass| {
+        trace!("Destroying render pass: {:?}", render_pass);
+        device.destroy_render_pass(render_pass, allocator);
+    }) })
+}
+
+unsafe fn take_pipeline_ownership<'d, D: DeviceV1_0>(device: &'d D, allocator: Option<&'d AllocationCallbacks>, pipeline: Pipeline) -> VkOwned<Pipeline, impl Fn(Pipeline)> {
+    VkOwned::new(pipeline, move |pipeline| {
+        trace!("Destroying pipeline: {:?}", pipeline);
+        device.destroy_pipeline(pipeline, allocator);
+    })
+}
+
+// TODO: Fix the pipeline_cache safety
+pub fn create_graphics_pipelines_safe<'d, D: DeviceV1_0>(device: &'d D, pipeline_cache: &PipelineCache, create_infos: &[GraphicsPipelineCreateInfo], allocator: Option<&'d AllocationCallbacks>) -> std::result::Result<Vec<VkOwned<Pipeline, impl Fn(Pipeline)>>, (Vec<VkOwned<Pipeline, impl Fn (Pipeline)>>, Result)> {
+    let pipelines = unsafe { device.create_graphics_pipelines(*pipeline_cache, create_infos, allocator) };
+    let take_ownership = move |pipelines: Vec<Pipeline>| pipelines.into_iter().map(move |pipeline| unsafe {
+        take_pipeline_ownership::<'d, D>(device, allocator, pipeline)
+    }).collect();
+    match pipelines {
+        Ok(pipelines) => Ok(take_ownership(pipelines)),
+        Err((pipelines, err)) => Err((take_ownership(pipelines), err)),
+    }
+}

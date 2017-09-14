@@ -223,6 +223,8 @@ fn set_queue_family_indices(create_info: &mut vk::types::SwapchainCreateInfoKHR,
     }
 }
 
+const MAIN_STAGE_NAME: &'static str = "main";
+
 fn main() {
     use std::ffi::CString;
 
@@ -230,6 +232,7 @@ fn main() {
 
     let application_name = CString::new(TITLE).unwrap();
     let engine_name = CString::new("No Engine").unwrap();
+    let main_stage_name = CString::new(MAIN_STAGE_NAME).unwrap();
     let mut glfw = vk_glfw();
     let (window, _) = glfw.create_window(WIDTH, HEIGHT, TITLE, glfw::WindowMode::Windowed)
         .expect("GLFW window creation failed");
@@ -410,7 +413,7 @@ fn main() {
                 min_image_count: swap_image_count,
                 image_format: surface_format.format,
                 image_color_space: surface_format.color_space,
-                image_extent: swap_extent,
+                image_extent: swap_extent.clone(),
                 image_array_layers: 1,
                 image_usage: IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                 image_sharing_mode: SharingMode::Exclusive,
@@ -475,12 +478,199 @@ fn main() {
                     code_size: code.len(),
                     p_code: unsafe { std::mem::transmute(code_ptr) },
                 };
-                safe_create::create_shader_module_safe(&*device, &create_info, None)
+                safe_create::create_shader_module_safe(&*device, &create_info, None).unwrap()
             };
 
             {
+                use vk::types::*;
+
                 let vert_shader_module = create_shader_module(read_full_file("shaders/vertex.vert.spv").unwrap());
                 let frag_shader_module = create_shader_module(read_full_file("shaders/fragment.frag.spv").unwrap());
+                let vert_create_info = PipelineShaderStageCreateInfo {
+                    s_type: StructureType::PipelineShaderStageCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    stage: SHADER_STAGE_VERTEX_BIT,
+                    module: *vert_shader_module,
+                    p_name: main_stage_name.as_bytes().as_ptr() as *const i8,
+                    p_specialization_info: ptr::null(),
+                };
+                let frag_create_info = {
+                    let mut create_info = vert_create_info.clone();
+                    create_info.stage = SHADER_STAGE_FRAGMENT_BIT;
+                    create_info.module = *frag_shader_module;
+                    create_info
+                };
+                let shader_stages: [PipelineShaderStageCreateInfo; 2] = [vert_create_info.clone(), frag_create_info.clone()];
+                let vertex_input_state_create_info = PipelineVertexInputStateCreateInfo {
+                    s_type: StructureType::PipelineVertexInputStateCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    vertex_binding_description_count: 0,
+                    p_vertex_binding_descriptions: ptr::null(),
+                    vertex_attribute_description_count: 0,
+                    p_vertex_attribute_descriptions: ptr::null(),
+                };
+                let input_assembly_state_create_info = PipelineInputAssemblyStateCreateInfo {
+                    s_type: StructureType::PipelineInputAssemblyStateCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    topology: PrimitiveTopology::TriangleList,
+                    primitive_restart_enable: false as Bool32,
+                };
+                let viewports: [Viewport; 1] = [Viewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: swap_extent.width as libc::c_float,
+                    height: swap_extent.height as libc::c_float,
+                    min_depth: 0.0,
+                    max_depth: 1.0
+                }];
+                let scissors: [Rect2D; 1] = [Rect2D {
+                    offset: Offset2D {
+                        x: 0,
+                        y: 0,
+                    },
+                    extent: swap_extent.clone()
+                }];
+                let viewport_state_create_info = PipelineViewportStateCreateInfo {
+                    s_type: StructureType::PipelineViewportStateCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    viewport_count: viewports.len() as u32,
+                    p_viewports: viewports.as_ptr(),
+                    scissor_count: scissors.len() as u32,
+                    p_scissors: scissors.as_ptr(),
+                };
+                let rasterization_state_create_info = PipelineRasterizationStateCreateInfo {
+                    s_type: StructureType::PipelineRasterizationStateCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    depth_clamp_enable: false as Bool32,
+                    rasterizer_discard_enable: false as Bool32,
+                    polygon_mode: PolygonMode::Fill,
+                    line_width: 1.0,
+                    cull_mode: CULL_MODE_BACK_BIT,
+                    front_face: FrontFace::Clockwise,
+                    depth_bias_enable: false as Bool32,
+                    depth_bias_constant_factor: 0.0,
+                    depth_bias_clamp: 0.0,
+                    depth_bias_slope_factor: 0.0,
+                };
+                let multisample_state_create_info = PipelineMultisampleStateCreateInfo {
+                    s_type: StructureType::PipelineMultisampleStateCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    rasterization_samples: SAMPLE_COUNT_1_BIT,
+                    sample_shading_enable: false as Bool32,
+                    min_sample_shading: 1.0,
+                    p_sample_mask: ptr::null(),
+                    alpha_to_coverage_enable: false as Bool32,
+                    alpha_to_one_enable: false as Bool32,
+                };
+                let color_blend_attachment_state = PipelineColorBlendAttachmentState {
+                    blend_enable: false as Bool32,
+                    src_color_blend_factor: BlendFactor::One,
+                    dst_color_blend_factor: BlendFactor::Zero,
+                    color_blend_op: BlendOp::Add,
+                    src_alpha_blend_factor: BlendFactor::One,
+                    dst_alpha_blend_factor: BlendFactor::Zero,
+                    alpha_blend_op: BlendOp::Add,
+                    color_write_mask: COLOR_COMPONENT_R_BIT | COLOR_COMPONENT_G_BIT | COLOR_COMPONENT_B_BIT | COLOR_COMPONENT_A_BIT,
+                };
+                let color_blend_state_create_info = PipelineColorBlendStateCreateInfo {
+                    s_type: StructureType::PipelineColorBlendStateCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    logic_op_enable: false as Bool32,
+                    logic_op: LogicOp::Copy,
+                    attachment_count: 1,
+                    p_attachments: &color_blend_attachment_state,
+                    blend_constants: [0.0, 0.0, 0.0, 0.0],
+                };
+                let layout_create_info = PipelineLayoutCreateInfo {
+                    s_type: StructureType::PipelineLayoutCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    set_layout_count: 0,
+                    p_set_layouts: ptr::null(),
+                    push_constant_range_count: 0,
+                    p_push_constant_ranges: ptr::null(),
+                };
+                let pipeline_layout = safe_create::create_pipeline_layout_safe(&*device, &layout_create_info, None).unwrap();
+
+                let attachment_descriptions: [AttachmentDescription; 1] = [AttachmentDescription {
+                    flags: Default::default(),
+                    format: surface_format.format,
+                    samples: SAMPLE_COUNT_1_BIT,
+                    load_op: AttachmentLoadOp::Clear,
+                    store_op: AttachmentStoreOp::Store,
+                    stencil_load_op: AttachmentLoadOp::DontCare,
+                    stencil_store_op: AttachmentStoreOp::DontCare,
+                    initial_layout: ImageLayout::Undefined,
+                    final_layout: ImageLayout::PresentSrcKhr,
+                }];
+
+                let color_attachment_refs: [AttachmentReference; 1] = [AttachmentReference {
+                    attachment: 0,
+                    layout: ImageLayout::ColorAttachmentOptimal,
+                }];
+
+                let subpass_description = SubpassDescription {
+                    flags: Default::default(),
+                    pipeline_bind_point: PipelineBindPoint::Graphics,
+                    input_attachment_count: 0,
+                    p_input_attachments: ptr::null(),
+                    color_attachment_count: color_attachment_refs.len() as u32,
+                    p_color_attachments: color_attachment_refs.as_ptr(),
+                    p_resolve_attachments: ptr::null(),
+                    p_depth_stencil_attachment: ptr::null(),
+                    preserve_attachment_count: 0,
+                    p_preserve_attachments: ptr::null(),
+                };
+
+                let render_pass_create_info = RenderPassCreateInfo {
+                    s_type: StructureType::RenderPassCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    attachment_count: attachment_descriptions.len() as u32,
+                    p_attachments: attachment_descriptions.as_ptr(),
+                    subpass_count: 1,
+                    p_subpasses: &subpass_description,
+                    dependency_count: 0,
+                    p_dependencies: ptr::null(),
+                };
+
+                let render_pass = safe_create::create_render_pass_safe(&*device, &render_pass_create_info, None).unwrap();
+
+                let gfx_pipeline_create_info = GraphicsPipelineCreateInfo {
+                    s_type: StructureType::GraphicsPipelineCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    stage_count: shader_stages.len() as u32,
+                    p_stages: shader_stages.as_ptr(),
+                    p_vertex_input_state: &vertex_input_state_create_info as *const PipelineVertexInputStateCreateInfo,
+                    p_input_assembly_state: &input_assembly_state_create_info as *const PipelineInputAssemblyStateCreateInfo,
+                    p_tessellation_state: ptr::null(),
+                    p_viewport_state: &viewport_state_create_info as *const PipelineViewportStateCreateInfo,
+                    p_rasterization_state: &rasterization_state_create_info as *const PipelineRasterizationStateCreateInfo,
+                    p_multisample_state: &multisample_state_create_info as *const PipelineMultisampleStateCreateInfo,
+                    p_depth_stencil_state: ptr::null(),
+                    p_color_blend_state: &color_blend_state_create_info as *const PipelineColorBlendStateCreateInfo,
+                    p_dynamic_state: ptr::null(),
+                    layout: *pipeline_layout,
+                    render_pass: *render_pass,
+                    subpass: 0,
+                    base_pipeline_handle: Pipeline::null(),
+                    base_pipeline_index: 0,
+                };
+
+                let pipeline = safe_create::create_graphics_pipelines_safe(&*device, &PipelineCache::null(), &[gfx_pipeline_create_info], None)
+                    .map_err(|(_, res)| res)
+                    .unwrap()
+                    .into_iter()
+                    .next()
+                    .expect("Expected successful creation of a graphics pipeline to actually give us a graphics pipeline");
             };
 
             while !window.should_close() {
