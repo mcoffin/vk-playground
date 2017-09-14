@@ -44,7 +44,7 @@ impl<'instance> SafeDeviceV1_0<'instance> {
 impl<'instance> Drop for SafeDeviceV1_0<'instance> {
     fn drop(&mut self) {
         unsafe {
-            debug!("Destroying device");
+            trace!("Destroying device");
             self.device.destroy_device(self.allocator);
         }
     }
@@ -58,10 +58,18 @@ impl<'instance> Deref for SafeDeviceV1_0<'instance> {
     }
 }
 
+pub fn create_shader_module_safe<'d, D: DeviceV1_0>(device: &'d D, create_info: &ShaderModuleCreateInfo, allocator: Option<&'d AllocationCallbacks>) -> VkResult<VkOwned<ShaderModule, impl Fn(ShaderModule)>> {
+    let unsafe_shader_module = unsafe { device.create_shader_module(create_info, allocator) };
+    unsafe_shader_module.map(|unsafe_shader_module| unsafe { VkOwned::new(unsafe_shader_module, move |shader_module| {
+        trace!("Destroying shader module: {:?}", shader_module);
+        device.destroy_shader_module(shader_module, allocator);
+    }) })
+}
+
 pub fn create_swapchain_khr_safe<'s>(vk_swapchain: &'s ash::extensions::Swapchain, create_info: &SwapchainCreateInfoKHR, allocator: Option<&'s AllocationCallbacks>) -> VkResult<VkOwned<SwapchainKHR, impl Fn(SwapchainKHR)>> {
     let unsafe_swapchain = unsafe { vk_swapchain.create_swapchain_khr(&create_info, allocator) };
     unsafe_swapchain.map(|unsafe_swapchain| unsafe { VkOwned::new(unsafe_swapchain, move |swapchain| {
-        debug!("Destroying swapchain: {:?}", swapchain);
+        trace!("Destroying swapchain: {:?}", swapchain);
         vk_swapchain.destroy_swapchain_khr(swapchain, allocator);
     }) })
 }
@@ -69,7 +77,7 @@ pub fn create_swapchain_khr_safe<'s>(vk_swapchain: &'s ash::extensions::Swapchai
 pub fn create_image_view_safe<'s, D: DeviceV1_0>(device: &'s D, create_info: &ImageViewCreateInfo, allocator: Option<&'s AllocationCallbacks>) -> VkResult<VkOwned<ImageView, impl Fn(ImageView)>> {
     let unsafe_image_view = unsafe { device.create_image_view(create_info, allocator) };
     unsafe_image_view.map(|unsafe_image_view| unsafe { VkOwned::new(unsafe_image_view, move |image_view| {
-        debug!("Destroying image view: {:?}", image_view);
+        trace!("Destroying image view: {:?}", image_view);
         device.destroy_image_view(image_view, allocator);
     }) })
 }
@@ -77,7 +85,7 @@ pub fn create_image_view_safe<'s, D: DeviceV1_0>(device: &'s D, create_info: &Im
 pub fn create_window_surface_safe<'s, I: InstanceV1_0>(vk: &'s I, vk_surface: &'s ash::extensions::Surface, window: &'s glfw::Window, allocator: Option<&'s AllocationCallbacks>) -> VkResult<VkOwned<SurfaceKHR, impl Fn(SurfaceKHR)>> {
     let unsafe_surface = unsafe { glfw_surface::create_window_surface(vk, window, allocator) };
     unsafe_surface.map(|unsafe_surface| unsafe { VkOwned::new(unsafe_surface, move |surface| {
-        debug!("Destroying surface: {:?}", surface);
+        trace!("Destroying surface: {:?}", surface);
         vk_surface.destroy_surface_khr(surface, allocator)
     }) })
 }

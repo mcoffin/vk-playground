@@ -13,7 +13,7 @@ mod safe_ext;
 
 use ash::vk;
 use libc::{ c_char, c_float, c_uint };
-use std::{ ptr, slice };
+use std::{ fs, io, ptr, slice };
 use glfw::ffi as glfw_sys;
 
 const WIDTH: u32 = 1280;
@@ -23,6 +23,21 @@ const TITLE: &'static str = "Smolder";
 const REQUIRED_EXTENSIONS: [&'static str; 1] = [
     vk::types::VK_KHR_SWAPCHAIN_EXTENSION_NAME
 ];
+
+fn read_full_file(filename: &str) -> io::Result<Vec<u8>> {
+    use io::Read;
+
+    let mut file = try!(fs::File::open(filename));
+    let mut buf: Vec<u8> = match file.metadata() {
+        Ok(metadata) => Vec::with_capacity(metadata.len() as usize),
+        Err(ref e) => {
+            warn!("Error while reading metadata for file {}: {:?}", filename, e);
+            Vec::new()
+        },
+    };
+    try!(file.read_to_end(&mut buf));
+    Ok(buf)
+}
 
 trait GlfwVulkanExtensions {
     /// The implementation from the `glfw` crate converts to rust strings, when
@@ -449,6 +464,24 @@ fn main() {
             }).collect();
             assert!(swapchain_images.len() as u32 >= swap_image_count);
             debug!("We desired at least {} images. The swapchain is using {}", swap_image_count, swapchain_images.len());
+
+            let create_shader_module = |code: Vec<u8>| {
+                use vk::types::*;
+                let code_ptr: *const u8 = code.as_slice().as_ptr();
+                let create_info = ShaderModuleCreateInfo {
+                    s_type: StructureType::ShaderModuleCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    code_size: code.len(),
+                    p_code: unsafe { std::mem::transmute(code_ptr) },
+                };
+                safe_create::create_shader_module_safe(&*device, &create_info, None)
+            };
+
+            {
+                let vert_shader_module = create_shader_module(read_full_file("shaders/vertex.vert.spv").unwrap());
+                let frag_shader_module = create_shader_module(read_full_file("shaders/fragment.frag.spv").unwrap());
+            };
 
             while !window.should_close() {
                 glfw.poll_events();
