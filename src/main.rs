@@ -24,6 +24,8 @@ const REQUIRED_EXTENSIONS: [&'static str; 1] = [
     vk::types::VK_KHR_SWAPCHAIN_EXTENSION_NAME
 ];
 
+const CLEAR_VALUE: [libc::c_float; 4] = [0.0, 0.0, 0.0, 0.0];
+
 fn read_full_file(filename: &str) -> io::Result<Vec<u8>> {
     use io::Read;
 
@@ -714,6 +716,50 @@ fn main() {
                 }).unwrap()
             };
             assert!(command_buffers.len() == framebuffers.len());
+
+            // Start command buffers (fucking state g'dammit)
+            for (command_buffer, framebuffer) in command_buffers.iter().zip(framebuffers.iter()) {
+                use vk::types::*;
+                let begin_info = CommandBufferBeginInfo {
+                    s_type: StructureType::CommandBufferBeginInfo,
+                    p_next: ptr::null(),
+                    flags: COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT,
+                    p_inheritance_info: ptr::null(),
+                };
+                unsafe {
+                    device.begin_command_buffer(*command_buffer, &begin_info).unwrap();
+                }
+                let clear_values: [ClearValue; 1] = [ClearValue::new_color(ClearColorValue::new_float32(CLEAR_VALUE))];
+                unsafe {
+                    device.cmd_begin_render_pass(
+                        *command_buffer,
+                        &RenderPassBeginInfo {
+                            s_type: StructureType::RenderPassBeginInfo,
+                            p_next: ptr::null(),
+                            render_pass: *render_pass,
+                            framebuffer: **framebuffer,
+                            render_area: Rect2D {
+                                offset: Offset2D {
+                                    x: 0,
+                                    y: 0,
+                                },
+                                extent: swap_extent.clone(),
+                            },
+                            clear_value_count: clear_values.len() as u32,
+                            p_clear_values: clear_values.as_ptr()
+                        },
+                        SubpassContents::Inline
+                    );
+                    device.cmd_bind_pipeline(
+                        *command_buffer,
+                        PipelineBindPoint::Graphics,
+                        *pipeline,
+                    );
+                    device.cmd_draw(*command_buffer, 3, 1, 0, 0);
+                    device.cmd_end_render_pass(*command_buffer);
+                    device.end_command_buffer(*command_buffer).unwrap();
+                }
+            }
 
             while !window.should_close() {
                 glfw.poll_events();
