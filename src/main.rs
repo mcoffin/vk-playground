@@ -26,6 +26,16 @@ const REQUIRED_EXTENSIONS: [&'static str; 1] = [
 
 const CLEAR_VALUE: [libc::c_float; 4] = [0.0, 0.0, 0.0, 0.0];
 
+use vk::types::*;
+
+unsafe extern "system" fn debug_report_callback(_: DebugReportFlagsEXT, _: DebugReportObjectTypeEXT, _: u64, _: libc::size_t, _: i32, layer_prefix: *const libc::c_char, msg: *const libc::c_char, _: *mut libc::c_void) -> Bool32 {
+    use std::ffi::CStr;
+    let layer_prefix = CStr::from_ptr(layer_prefix);
+    let msg = CStr::from_ptr(msg);
+    debug!("validation: {:?}: {:?}", layer_prefix, msg);
+    return true as Bool32;
+}
+
 fn read_full_file(filename: &str) -> io::Result<Vec<u8>> {
     use io::Read;
 
@@ -266,17 +276,43 @@ fn main() {
             enabled_extension_count: 0,
             pp_enabled_extension_names: ptr::null()
         };
-        if let Some(glfw_extensions) = glfw.get_required_instance_extensions_raw() {
-            let extension_names = glfw_extensions.iter().map(|&ptr| unsafe {
-                CString::from_raw(std::mem::transmute(ptr))
-            });
-            for ext_name in extension_names {
-                debug!("Requiring extension from glfw: {:?}", &ext_name);
-                ext_name.into_raw();
-            }
-            create_info.set_enabled_extensions(glfw_extensions);
-        }
+        use std::borrow::Cow;
+        let required_extensions: Vec<CString> = glfw.get_required_instance_extensions().unwrap_or(vec![])
+            .into_iter()
+            .map(|s| Cow::from(s))
+            .chain(std::iter::once(Cow::from("VK_EXT_debug_report")))
+            .map(|cow| CString::new(&*cow).unwrap())
+            .collect();
+        debug!("Requiring extensions: {:?}", required_extensions.as_slice());
+        let required_extensions_ptrs: Vec<*const libc::c_char> = required_extensions
+            .iter()
+            .map(|s| s.as_ptr())
+            .collect();
+        create_info.enabled_extension_count = required_extensions_ptrs.len() as u32;
+        create_info.pp_enabled_extension_names = required_extensions_ptrs.as_slice().as_ptr();
+        let validation_layers: Vec<CString> = ["VK_LAYER_LUNARG_standard_validation"].into_iter()
+            .map(|&s| CString::new(s).unwrap())
+            .collect();
+        let validation_layers_ptrs: Vec<*const libc::c_char> = validation_layers
+            .iter()
+            .map(|s| s.as_ptr())
+            .collect();
+        create_info.enabled_layer_count = validation_layers_ptrs.len() as u32;
+        create_info.pp_enabled_layer_names = validation_layers_ptrs.as_slice().as_ptr();
         ash_vk.create_instance(&create_info, None).unwrap()
+    };
+    let vk_debug_report = ash::extensions::DebugReport::new(&ash_vk, &instance).unwrap();
+    {
+        let create_info = DebugReportCallbackCreateInfoEXT {
+            s_type: StructureType::DebugReportCallbackCreateInfoExt,
+            p_next: ptr::null(),
+            flags: DEBUG_REPORT_ERROR_BIT_EXT | DEBUG_REPORT_WARNING_BIT_EXT,
+            pfn_callback: debug_report_callback,
+            p_user_data: ptr::null_mut(),
+        };
+        unsafe {
+            vk_debug_report.create_debug_report_callback_ext(&create_info, None).unwrap();
+        }
     };
     let vk_surface = ash::extensions::Surface::new(&ash_vk, &instance).unwrap();
     {
@@ -631,6 +667,16 @@ fn main() {
                     p_preserve_attachments: ptr::null(),
                 };
 
+                let dependencies: [SubpassDependency; 1] = [SubpassDependency {
+                    src_subpass: VK_SUBPASS_EXTERNAL,
+                    dst_subpass: 0,
+                    src_stage_mask: PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    src_access_mask: Default::default(),
+                    dst_stage_mask: PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    dst_access_mask: ACCESS_COLOR_ATTACHMENT_READ_BIT | ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                    dependency_flags: Default::default(),
+                }];
+
                 let render_pass_create_info = RenderPassCreateInfo {
                     s_type: StructureType::RenderPassCreateInfo,
                     p_next: ptr::null(),
@@ -639,8 +685,8 @@ fn main() {
                     p_attachments: attachment_descriptions.as_ptr(),
                     subpass_count: 1,
                     p_subpasses: &subpass_description,
-                    dependency_count: 0,
-                    p_dependencies: ptr::null(),
+                    dependency_count: dependencies.len() as u32,
+                    p_dependencies: dependencies.as_ptr(),
                 };
 
                 let render_pass = safe_create::create_render_pass_safe(&*device, &render_pass_create_info, None).unwrap();
@@ -761,9 +807,68 @@ fn main() {
                 }
             }
 
+            let (image_available_semaphore, render_finished_semaphore) = {
+                use vk::types::*;
+                let create_info = SemaphoreCreateInfo {
+                    s_type: StructureType::SemaphoreCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                };
+                let image_available_semaphore = safe_create::create_semaphore_safe(&*device, &create_info, None).unwrap();
+                let render_finished_semaphore = safe_create::create_semaphore_safe(&*device, &create_info, None).unwrap();
+                (image_available_semaphore, render_finished_semaphore)
+            };
+
+            let draw_frame = || {
+                use vk::types::*;
+                trace!("draw_frame() beginning");
+                let wait_semaphores: [Semaphore; 1] = [*image_available_semaphore];
+                let signal_semaphores: [Semaphore; 1] = [*render_finished_semaphore];
+                debug!("Using wait semaphores: {:?}", &wait_semaphores);
+                debug!("Using signal semaphores: {:?}", &signal_semaphores);
+                unsafe {
+                    let image_idx = vk_swapchain.acquire_next_image_khr(
+                        *swapchain,
+                        std::u64::MAX,
+                        *image_available_semaphore,
+                        Fence::null()
+                    ).unwrap();
+                    let wait_stages = &PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    let submit_info = SubmitInfo {
+                        s_type: StructureType::SubmitInfo,
+                        p_next: ptr::null(),
+                        wait_semaphore_count: wait_semaphores.len() as u32,
+                        p_wait_semaphores: wait_semaphores.as_ptr(),
+                        p_wait_dst_stage_mask: wait_stages as *const PipelineStageFlags,
+                        command_buffer_count: 1,
+                        p_command_buffers: &command_buffers[image_idx as usize] as *const CommandBuffer,
+                        signal_semaphore_count: signal_semaphores.len() as u32,
+                        p_signal_semaphores: signal_semaphores.as_ptr(),
+                    };
+                    debug!("Submitting graphics queue: {:?}", &submit_info);
+                    device.queue_submit(graphics_queue, &[submit_info], Fence::null()).unwrap();
+                    let swap_chains: [SwapchainKHR; 1] = [*swapchain];
+                    trace!("draw_frame() presenting");
+                    let mut results = vec![Result::Success];
+                    vk_swapchain.queue_present_khr(presentation_queue, &PresentInfoKHR {
+                        s_type: StructureType::PresentInfoKhr,
+                        p_next: ptr::null(),
+                        wait_semaphore_count: signal_semaphores.len() as u32,
+                        p_wait_semaphores: signal_semaphores.as_ptr(),
+                        swapchain_count: swap_chains.len() as u32,
+                        p_swapchains: swap_chains.as_ptr(),
+                        p_image_indices: &image_idx as *const u32,
+                        p_results: results.as_mut_slice().as_mut_ptr() as *mut Result,
+                    }).unwrap()
+                }
+            };
+
             while !window.should_close() {
                 glfw.poll_events();
+                draw_frame();
             }
+
+            device.device_wait_idle().unwrap();
         }
     };
 

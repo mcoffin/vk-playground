@@ -165,3 +165,11 @@ pub fn create_command_pool_safe<'device, D: DeviceV1_0>(device: &'device D, crea
         device.destroy_command_pool(command_pool, allocator);
     }) })
 }
+
+pub fn create_semaphore_safe<'device, D: DeviceV1_0>(device: &'device D, create_info: &SemaphoreCreateInfo, allocator: Option<&'device AllocationCallbacks>) -> VkResult<VkOwned<Semaphore, impl Fn(Semaphore)>> {
+    let unsafe_sem = unsafe { device.create_semaphore(create_info, allocator) };
+    unsafe_sem.map(|unsafe_sem| unsafe { VkOwned::new(unsafe_sem, move |sem| {
+        trace!("Destroying semaphore: {:?}", sem);
+        device.destroy_semaphore(sem, allocator);
+    }) })
+}
