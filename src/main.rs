@@ -463,7 +463,7 @@ fn main() {
                         layer_count: 1,
                     },
                 };
-                safe_create::create_image_view_safe(&*device, &create_info, None)
+                safe_create::create_image_view_safe(&*device, &create_info, None).unwrap()
             }).collect();
             assert!(swapchain_images.len() as u32 >= swap_image_count);
             debug!("We desired at least {} images. The swapchain is using {}", swap_image_count, swapchain_images.len());
@@ -481,7 +481,7 @@ fn main() {
                 safe_create::create_shader_module_safe(&*device, &create_info, None).unwrap()
             };
 
-            {
+            let (pipeline, pipeline_layout, render_pass) = {
                 use vk::types::*;
 
                 let vert_shader_module = create_shader_module(read_full_file("shaders/vertex.vert.spv").unwrap());
@@ -671,7 +671,27 @@ fn main() {
                     .into_iter()
                     .next()
                     .expect("Expected successful creation of a graphics pipeline to actually give us a graphics pipeline");
+
+                (pipeline, pipeline_layout, render_pass)
             };
+            let framebuffers: Vec<vk_mem::VkOwned<vk::types::Framebuffer, _>> = image_views.iter().map(|image_view| {
+                use vk::types::*;
+
+                let raw_create_info = FramebufferCreateInfo {
+                    s_type: StructureType::FramebufferCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    render_pass: RenderPass::null(),
+                    attachment_count: 0,
+                    p_attachments: ptr::null(),
+                    width: swap_extent.width,
+                    height: swap_extent.height,
+                    layers: 1,
+                };
+                let image_view: &ImageView = &*image_view;
+                let create_info = safe_create::FramebufferCreateInfoSafe::new(raw_create_info, &render_pass, std::iter::once(&*image_view));
+                safe_create::create_framebuffer_safe(&*device, create_info, None).unwrap()
+            }).collect();
 
             while !window.should_close() {
                 glfw.poll_events();

@@ -124,3 +124,36 @@ pub fn create_graphics_pipelines_safe<'d, D: DeviceV1_0>(device: &'d D, pipeline
         Err((pipelines, err)) => Err((take_ownership(pipelines), err)),
     }
 }
+
+pub struct FramebufferCreateInfoSafe<'img> {
+    create_info: FramebufferCreateInfo,
+    attachments: Vec<ImageView>,
+    phantom_img: PhantomData<&'img ImageView>,
+}
+
+impl<'img> FramebufferCreateInfoSafe<'img> {
+    pub fn new<It>(mut create_info: FramebufferCreateInfo, render_pass: &'img RenderPass, attachments: It) -> FramebufferCreateInfoSafe<'img> where It: Iterator<Item=&'img ImageView> {
+        create_info.render_pass = *render_pass;
+        let mut ret = FramebufferCreateInfoSafe {
+            create_info: create_info,
+            attachments: attachments.map(|&img| img).collect(),
+            phantom_img: PhantomData,
+        };
+        ret.create_info.attachment_count = ret.attachments.len() as u32;
+        ret.create_info.p_attachments = ret.attachments.as_slice().as_ptr();
+        ret
+    }
+
+    pub fn info_ref(&self) -> &FramebufferCreateInfo {
+        &self.create_info
+    }
+}
+
+pub fn create_framebuffer_safe<'device, 'img, D: DeviceV1_0>(device: &'device D, create_info: FramebufferCreateInfoSafe<'img>, allocator: Option<&'device AllocationCallbacks>) -> VkResult<VkOwned<Framebuffer, impl Fn(Framebuffer)>> {
+    let unsafe_framebuffer = unsafe { device.create_framebuffer(create_info.info_ref(), allocator) };
+    unsafe_framebuffer.map(|unsafe_framebuffer| unsafe { VkOwned::new(unsafe_framebuffer, move |framebuffer| {
+        trace!("Destroying framebuffer: {:?}", framebuffer);
+        trace!("Destroyed framebuffer was created from {:?}", create_info.info_ref());
+        device.destroy_framebuffer(framebuffer, allocator);
+    }) })
+}
