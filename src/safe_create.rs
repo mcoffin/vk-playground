@@ -157,3 +157,11 @@ pub fn create_framebuffer_safe<'device, 'img, D: DeviceV1_0>(device: &'device D,
         device.destroy_framebuffer(framebuffer, allocator);
     }) })
 }
+
+pub fn create_command_pool_safe<'device, D: DeviceV1_0>(device: &'device D, create_info: &CommandPoolCreateInfo, allocator: Option<&'device AllocationCallbacks>) -> VkResult<VkOwned<CommandPool, impl Fn(CommandPool)>> {
+    let unsafe_command_pool = unsafe { device.create_command_pool(create_info, allocator) };
+    unsafe_command_pool.map(|unsafe_command_pool| unsafe { VkOwned::new(unsafe_command_pool, move |command_pool| {
+        trace!("Destroying command pool: {:?}", command_pool);
+        device.destroy_command_pool(command_pool, allocator);
+    }) })
+}

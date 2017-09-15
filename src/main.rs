@@ -693,6 +693,17 @@ fn main() {
                 safe_create::create_framebuffer_safe(&*device, create_info, None).unwrap()
             }).collect();
 
+            let command_pool = {
+                use vk::types::*;
+                let command_pool_create_info = CommandPoolCreateInfo {
+                    s_type: StructureType::CommandPoolCreateInfo,
+                    p_next: ptr::null(),
+                    flags: Default::default(),
+                    queue_family_index: graphics_family_idx as u32,
+                };
+                safe_create::create_command_pool_safe(&*device, &command_pool_create_info, None).unwrap()
+            };
+
             while !window.should_close() {
                 glfw.poll_events();
             }
