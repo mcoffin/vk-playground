@@ -28,11 +28,22 @@ const CLEAR_VALUE: [libc::c_float; 4] = [0.0, 0.0, 0.0, 0.0];
 
 use vk::types::*;
 
-unsafe extern "system" fn debug_report_callback(_: DebugReportFlagsEXT, _: DebugReportObjectTypeEXT, _: u64, _: libc::size_t, _: i32, layer_prefix: *const libc::c_char, msg: *const libc::c_char, _: *mut libc::c_void) -> Bool32 {
+unsafe extern "system" fn debug_report_callback(flags: DebugReportFlagsEXT, _: DebugReportObjectTypeEXT, _: u64, _: libc::size_t, _: i32, layer_prefix: *const libc::c_char, msg: *const libc::c_char, _: *mut libc::c_void) -> Bool32 {
     use std::ffi::CStr;
     let layer_prefix = CStr::from_ptr(layer_prefix);
     let msg = CStr::from_ptr(msg);
-    debug!("validation: {:?}: {:?}", layer_prefix, msg);
+    let msg_string = format!("{:?}: {:?}", layer_prefix, msg);
+    if flags.intersects(DEBUG_REPORT_INFORMATION_BIT_EXT) {
+        info!("{}", &msg_string);
+    } else if flags.intersects(DEBUG_REPORT_WARNING_BIT_EXT) {
+        warn!("{}", &msg_string);
+    } else if flags.intersects(DEBUG_REPORT_ERROR_BIT_EXT) {
+        error!("{}", &msg_string);
+    } else if flags.intersects(DEBUG_REPORT_DEBUG_BIT_EXT) {
+        debug!("{}", &msg_string);
+    } else {
+        trace!("{}", &msg_string);
+    }
     return true as Bool32;
 }
 
@@ -219,20 +230,14 @@ fn required_extensions() -> Vec<std::ffi::CString> {
         .collect()
 }
 
-fn set_queue_family_indices(create_info: &mut vk::types::SwapchainCreateInfoKHR, queue_family_indices: &[u32]) {
-    use std::collections::BTreeSet;
-
-    let unique_queue_families: BTreeSet<u32> = queue_family_indices.iter().map(|&idx| idx).collect();
-
-    if unique_queue_families.len() == 0 {
-        create_info.image_sharing_mode = vk::types::SharingMode::Exclusive;
-        create_info.queue_family_index_count = 0;
-        create_info.p_queue_family_indices = ptr::null();
-    } else {
-        create_info.image_sharing_mode = vk::types::SharingMode::Concurrent;
-        create_info.queue_family_index_count = queue_family_indices.len() as u32;
-        create_info.p_queue_family_indices = queue_family_indices.as_ptr();
-    }
+fn update_sharing_mode(create_info: &mut SwapchainCreateInfoKHR) {
+    create_info.image_sharing_mode = {
+        if create_info.queue_family_index_count > 1 {
+            SharingMode::Concurrent
+        } else {
+            SharingMode::Exclusive
+        }
+    };
 }
 
 const MAIN_STAGE_NAME: &'static str = "main";
@@ -302,16 +307,16 @@ fn main() {
         ash_vk.create_instance(&create_info, None).unwrap()
     };
     let vk_debug_report = ash::extensions::DebugReport::new(&ash_vk, &instance).unwrap();
-    {
+    let debug_report = {
         let create_info = DebugReportCallbackCreateInfoEXT {
             s_type: StructureType::DebugReportCallbackCreateInfoExt,
             p_next: ptr::null(),
-            flags: DEBUG_REPORT_ERROR_BIT_EXT | DEBUG_REPORT_WARNING_BIT_EXT,
+            flags: DEBUG_REPORT_ERROR_BIT_EXT | DEBUG_REPORT_WARNING_BIT_EXT | DEBUG_REPORT_INFORMATION_BIT_EXT | DEBUG_REPORT_DEBUG_BIT_EXT,
             pfn_callback: debug_report_callback,
             p_user_data: ptr::null_mut(),
         };
         unsafe {
-            vk_debug_report.create_debug_report_callback_ext(&create_info, None).unwrap();
+            vk_debug_report.create_debug_report_callback_ext(&create_info, None).unwrap()
         }
     };
     let vk_surface = ash::extensions::Surface::new(&ash_vk, &instance).unwrap();
@@ -386,29 +391,39 @@ fn main() {
         let device = {
             use vk::types::*;
 
-            let queue_priorities: [c_float; 1] = [1.0];
+            let queue_priorities: [c_float; 2] = [1.0, 1.0];
 
-            let mut create_infos: [DeviceQueueCreateInfo; 2] = [
-                DeviceQueueCreateInfo {
-                    s_type: StructureType::DeviceQueueCreateInfo,
-                    p_next: ptr::null(),
-                    flags: Default::default(),
-                    queue_family_index: graphics_family_idx as libc::uint32_t,
-                    queue_count: 0,
-                    p_queue_priorities: ptr::null()
-                },
-                DeviceQueueCreateInfo {
-                    s_type: StructureType::DeviceQueueCreateInfo,
-                    p_next: ptr::null(),
-                    flags: Default::default(),
-                    queue_family_index: presentation_family_idx as libc::uint32_t,
-                    queue_count: 0,
-                    p_queue_priorities: ptr::null()
-                }
-            ];
-            for create_info in create_infos.iter_mut() {
-                create_info.set_queue_priorities(&queue_priorities);
-            }
+            let create_infos: Vec<DeviceQueueCreateInfo> = if graphics_family_idx != presentation_family_idx {
+                vec![
+                    DeviceQueueCreateInfo {
+                        s_type: StructureType::DeviceQueueCreateInfo,
+                        p_next: ptr::null(),
+                        flags: Default::default(),
+                        queue_family_index: graphics_family_idx as libc::uint32_t,
+                        queue_count: 1,
+                        p_queue_priorities: queue_priorities.as_ptr(),
+                    },
+                    DeviceQueueCreateInfo {
+                        s_type: StructureType::DeviceQueueCreateInfo,
+                        p_next: ptr::null(),
+                        flags: Default::default(),
+                        queue_family_index: presentation_family_idx as libc::uint32_t,
+                        queue_count: 1,
+                        p_queue_priorities: queue_priorities.as_ptr(),
+                    }
+                ]
+            } else {
+                vec![
+                    DeviceQueueCreateInfo {
+                        s_type: StructureType::DeviceQueueCreateInfo,
+                        p_next: ptr::null(),
+                        flags: Default::default(),
+                        queue_family_index: graphics_family_idx as u32,
+                        queue_count: 1,
+                        p_queue_priorities: queue_priorities.as_ptr(),
+                    }
+                ]
+            };
 
             let mut device_features: PhysicalDeviceFeatures = Default::default();
             device_features.geometry_shader = true as Bool32;
@@ -440,9 +455,15 @@ fn main() {
         //};
         let vk_swapchain = safe_ext::SafeSwapchain::new(&instance, &*device).unwrap();
         let swapchain = {
+            use std::collections::BTreeSet;
             use vk::types::*;
 
             let queue_family_indices: [u32; 2] = [graphics_family_idx as u32, presentation_family_idx as u32];
+            let unique_queue_family_indices: BTreeSet<u32> = queue_family_indices.iter()
+                .map(|&idx| idx)
+                .collect();
+            let queue_family_indices: Vec<u32> = unique_queue_family_indices.into_iter()
+                .collect();
             let mut create_info = SwapchainCreateInfoKHR {
                 s_type: StructureType::SwapchainCreateInfoKhr,
                 p_next: ptr::null(),
@@ -455,15 +476,15 @@ fn main() {
                 image_array_layers: 1,
                 image_usage: IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
                 image_sharing_mode: SharingMode::Exclusive,
-                queue_family_index_count: 0,
-                p_queue_family_indices: ptr::null(),
+                queue_family_index_count: queue_family_indices.len() as u32,
+                p_queue_family_indices: queue_family_indices.as_ptr(),
                 pre_transform: swap_support.capabilities.current_transform,
                 composite_alpha: COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
                 present_mode: present_mode,
                 clipped: true as Bool32,
                 old_swapchain: SwapchainKHR::null(),
             };
-            set_queue_family_indices(&mut create_info, &queue_family_indices);
+            update_sharing_mode(&mut create_info);
             debug!("Creating swapchain with parameters: {:?}", &create_info);
             safe_create::create_swapchain_khr_safe(&vk_swapchain, &create_info, None).unwrap()
         };
@@ -472,8 +493,12 @@ fn main() {
             device.get_device_queue(graphics_family_idx as libc::uint32_t, 0)
         };
         debug!("Using graphics queue: {:?}", graphics_queue);
-        let presentation_queue = unsafe {
-            device.get_device_queue(presentation_family_idx as libc::uint32_t, 1)
+        let presentation_queue = if graphics_family_idx == presentation_family_idx {
+            graphics_queue
+        } else {
+            unsafe {
+                device.get_device_queue(presentation_family_idx as u32, 0)
+            }
         };
         debug!("Using presentation queue: {:?}", presentation_queue);
 
@@ -874,6 +899,9 @@ fn main() {
 
     unsafe {
         use ash::version::InstanceV1_0;
+
+        trace!("Destroying debug report: {:?}", debug_report);
+        vk_debug_report.destroy_debug_report_callback_ext(debug_report, None);
 
         debug!("Destroying instance");
         instance.destroy_instance(None);
