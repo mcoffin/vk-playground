@@ -846,11 +846,8 @@ fn main() {
 
             let draw_frame = || {
                 use vk::types::*;
-                trace!("draw_frame() beginning");
                 let wait_semaphores: [Semaphore; 1] = [*image_available_semaphore];
                 let signal_semaphores: [Semaphore; 1] = [*render_finished_semaphore];
-                debug!("Using wait semaphores: {:?}", &wait_semaphores);
-                debug!("Using signal semaphores: {:?}", &signal_semaphores);
                 unsafe {
                     let image_idx = vk_swapchain.acquire_next_image_khr(
                         *swapchain,
@@ -870,10 +867,8 @@ fn main() {
                         signal_semaphore_count: signal_semaphores.len() as u32,
                         p_signal_semaphores: signal_semaphores.as_ptr(),
                     };
-                    debug!("Submitting graphics queue: {:?}", &submit_info);
                     device.queue_submit(graphics_queue, &[submit_info], Fence::null()).unwrap();
                     let swap_chains: [SwapchainKHR; 1] = [*swapchain];
-                    trace!("draw_frame() presenting");
                     let mut results = vec![Result::Success];
                     vk_swapchain.queue_present_khr(presentation_queue, &PresentInfoKHR {
                         s_type: StructureType::PresentInfoKhr,
