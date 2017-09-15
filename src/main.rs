@@ -704,6 +704,17 @@ fn main() {
                 safe_create::create_command_pool_safe(&*device, &command_pool_create_info, None).unwrap()
             };
 
+            let command_buffers = unsafe {
+                device.allocate_command_buffers(&vk::types::CommandBufferAllocateInfo {
+                    s_type: vk::types::StructureType::CommandBufferAllocateInfo,
+                    p_next: ptr::null(),
+                    command_pool: *command_pool,
+                    level: vk::types::CommandBufferLevel::Primary,
+                    command_buffer_count: framebuffers.len() as u32,
+                }).unwrap()
+            };
+            assert!(command_buffers.len() == framebuffers.len());
+
             while !window.should_close() {
                 glfw.poll_events();
             }
