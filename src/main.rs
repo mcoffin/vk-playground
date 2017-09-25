@@ -105,8 +105,17 @@ impl DeviceQueueCreateInfoExtensions for ash::vk::types::DeviceQueueCreateInfo {
     }
 }
 
+fn log_on_errors<UserData>(_: glfw::Error, description: String, _: &UserData) {
+    error!("GLFW Error: {}", &description);
+}
+
+const LOG_ON_ERRORS: glfw::ErrorCallback<()> = glfw::ErrorCallback {
+    f: log_on_errors,
+    data: (),
+};
+
 fn vk_glfw() -> glfw::Glfw {
-    let mut glfw = glfw::init(glfw::FAIL_ON_ERRORS).unwrap();
+    let mut glfw = glfw::init(Some(LOG_ON_ERRORS)).unwrap();
     glfw.window_hint(glfw::WindowHint::ClientApi(glfw::ClientApiHint::NoApi));
     glfw.window_hint(glfw::WindowHint::Resizable(false));
     // We must have vulkan support in glfw to continue
@@ -251,7 +260,7 @@ fn main() {
     let engine_name = CString::new("No Engine").unwrap();
     let main_stage_name = CString::new(MAIN_STAGE_NAME).unwrap();
     let mut glfw = vk_glfw();
-    let (window, _) = glfw.create_window(WIDTH, HEIGHT, TITLE, glfw::WindowMode::Windowed)
+    let (window, events) = glfw.create_window(WIDTH, HEIGHT, TITLE, glfw::WindowMode::Windowed)
         .expect("GLFW window creation failed");
 
     let ash_vk: ash::Entry<ash::version::V1_0> = ash::Entry::new().unwrap();
@@ -883,8 +892,19 @@ fn main() {
                 }
             };
 
-            while !window.should_close() {
+            let mut should_close = false;
+
+            while !window.should_close() && !should_close {
                 glfw.poll_events();
+                for (_, event) in glfw::flush_messages(&events) {
+                    debug!("GLFW got event: {:?}", &event);
+                    match event {
+                        glfw::WindowEvent::Key(glfw::Key::Escape, _, glfw::Action::Press, _) => {
+                            should_close = true;
+                        },
+                        _ => {}
+                    }
+                }
                 draw_frame();
             }
 
